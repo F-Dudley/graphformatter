@@ -36,11 +36,14 @@ class FFormatterModule : public IModuleInterface
     FDelegateHandle GraphEditorDelegateHandle;
     TArray<TSharedPtr<EGraphFormatterPositioningAlgorithm>> AlgorithmOptions;
     TSharedPtr<FExtender> ToolbarExtender;
+
 public:
     void FillToolbar(FToolBarBuilder& ToolbarBuilder);
     void ExtendToolBar(IAssetEditorInstance* Instance);
     void MapCommands(UObject* Object, IAssetEditorInstance* Instance);
     void OnGraphEditorDetected(UObject* Object, IAssetEditorInstance* Instance);
+
+    void HandleAutoFormatEvents(UObject* Object, IAssetEditorInstance* Instance);
 };
 
 class FAssetEditorInstance
@@ -164,6 +167,8 @@ void FFormatterModule::HandleAssetEditorOpened(UObject* Object, IAssetEditorInst
     {
         return;
     }
+
+    bool AssignedPostCreated = false;
     const UFormatterSettings* Settings = GetDefault<UFormatterSettings>();
     if (FFormatter::Instance().IsAssetSupported(Object))
     {
@@ -180,6 +185,8 @@ void FFormatterModule::HandleAssetEditorOpened(UObject* Object, IAssetEditorInst
                 auto EditorInstance = new FAssetEditorInstance{this, Instance, Object};
                 GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OnAssetEditorOpened().AddRaw(EditorInstance, &FAssetEditorInstance::HandleEditorWidgetCreated);
                 FAssetEditorInstance::Instances.Add(Object, EditorInstance);
+
+				AssignedPostCreated = true;
             }
             else
             {
@@ -188,6 +195,77 @@ void FFormatterModule::HandleAssetEditorOpened(UObject* Object, IAssetEditorInst
             }
         }
     }
+
+    if (Settings->bEnableAutomaticAlignment && !AssignedPostCreated)
+    {
+        auto EditorInstance = new FAssetEditorInstance{ this, Instance, Object };
+        GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OnAssetEditorOpened().AddRaw(EditorInstance, &FAssetEditorInstance::HandleEditorWidgetCreated);
+        FAssetEditorInstance::Instances.Add(Object, EditorInstance);
+    }
+}
+
+void FFormatterModule::HandleAutoFormatEvents(UObject* Object, IAssetEditorInstance* Instance)
+{
+    auto GraphEditor = FindEditorForObject(Object);
+    if (!GraphEditor)
+    {
+        UE_LOG(LogTemp, Log, TEXT("AutoAlignment: No graph editor found for object: %s"), *Object->GetName());
+        return;
+    }
+
+	TWeakObjectPtr<UObject> WeakObject(Object);
+    auto FormatDelegate = TDelegate<void(const FEdGraphEditAction&)>::CreateLambda(
+        [GraphEditor, WeakObject, this](const FEdGraphEditAction& EditAction)
+        {
+			UE_LOG(LogTemp, Log, TEXT("Graph changed: Action=%d, UserInvoked=%s, NodesAffected=%d"), EditAction.Action, EditAction.bUserInvoked ? TEXT("true") : TEXT("false"), EditAction.Nodes.Num());
+
+            if (EditAction.Action & (GRAPHACTION_RemoveNode | GRAPHACTION_EditNode))
+                return;
+
+
+            // 1. Safety check
+            if (!WeakObject.IsValid() || !EditAction.bUserInvoked) return;
+
+            const UFormatterSettings* Settings = GetDefault<UFormatterSettings>();
+            bool bShouldFormat = false;
+
+            // 2. Check ADD NODE trigger
+            if ((Settings->AutoAlignTriggers & static_cast<uint8>(EAutoAlign::AddNode)) != 0)
+            {
+                if ((EditAction.Action & GRAPHACTION_AddNode) != 0)
+                {
+                    bShouldFormat = true;
+                }
+            }
+
+            // 3. Check NODE CONNECTION trigger
+            if ((Settings->AutoAlignTriggers & static_cast<uint8>(EAutoAlign::NodeConnection)) != 0)
+            {
+                // Connections and disconnections are broadcast as the 'Default' action
+                // We verify Nodes.Num() > 0 to ensure actual nodes were involved in the event
+                if (EditAction.Action == GRAPHACTION_Default && EditAction.Nodes.Num() > 0)
+                {
+                    bShouldFormat = true;
+                }
+            }
+
+            // 4. Execute Deferred Formatting if any trigger was hit
+            if (bShouldFormat)
+            {
+                FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
+                    [GraphEditor, WeakObject](float DeltaTime) -> bool
+                    {
+                        if (WeakObject.IsValid() && GraphEditor != nullptr)
+                        {
+                            FFormatter::Instance().SetCurrentEditor(GraphEditor, WeakObject.Get());
+                            FFormatter::Instance().Format();
+                        }
+                        return false;
+                    }));
+            }
+        });
+
+    GraphEditor->GetCurrentGraph()->AddOnGraphChangedHandler(FormatDelegate);
 }
 
 static FText GetEnumAsString(EGraphFormatterPositioningAlgorithm EnumValue)
@@ -413,6 +491,15 @@ void FAssetEditorInstance::HandleEditorWidgetCreated(UObject* InObject)
             Module->OnGraphEditorDetected(Object, Instance);
         }
     }
+
+    if (Settings->bEnableAutomaticAlignment)
+    {
+        if (auto Editor = FFormatter::Instance().FindGraphEditorForTopLevelWindow())
+        {
+            Module->HandleAutoFormatEvents(Object, Instance);
+		}
+    }
+
     if (GEditor)
     {
         GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OnAssetEditorOpened().RemoveAll(this);

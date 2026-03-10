@@ -33,5 +33,7 @@ UFormatterSettings::UFormatterSettings()
     , bEnableBlueprintParameterGroup(true)
     , SpacingFactorOfParameterGroup(0.314)
     , MaxOrderingIterations(10)
+    , bEnableAutomaticAlignment(false)
+    , AutoAlignTriggers(static_cast<uint8>(EAutoAlign::AddNode | EAutoAlign::NodeConnection))
 {
 }

@@ -9,6 +9,19 @@
 #include "FormatterGraph.h"
 #include "FormatterSettings.generated.h"
 
+
+UENUM(meta = (Bitflags, UseEnumValuesAsMaskValuesInEditor = "true"))
+enum class EAutoAlign : uint8
+{
+	None = 0 UMETA(Hidden),
+    AddNode = 1 << 0,
+    RemoveNode = 1 << 1,
+    MoveNode = 1 << 2,
+    NodeConnection = 1 << 3
+};
+
+ENUM_CLASS_FLAGS(EAutoAlign)
+
 UCLASS(config = Editor)
 class GRAPHFORMATTER_API UFormatterSettings : public UObject
 {
@@ -70,4 +83,11 @@ public:
     FVector2D BackwardSplineTangentFromHorizontalDelta;
     UPROPERTY(config, Category= "Graph Formatter", BlueprintReadWrite)
     FVector2D BackwardSplineTangentFromVerticalDelta;
+
+    // Experimental: Automatic Alignment
+    UPROPERTY(config, EditAnywhere, Category="Automatic Alignment")
+    bool bEnableAutomaticAlignment;
+
+    UPROPERTY(config, EditAnywhere, Category="Automatic Alignment", meta = (EditCondition = "bEnableAutomaticAlignment", Bitmask, BitmaskEnum = "/Script/GraphFormatter.EAutoAlign"))
+    uint8 AutoAlignTriggers;
 };

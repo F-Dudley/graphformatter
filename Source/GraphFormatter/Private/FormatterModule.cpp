@@ -84,6 +84,48 @@ void FFormatterModule::StartupModule()
     AlgorithmOptions.Add(MakeShareable(new EGraphFormatterPositioningAlgorithm(EGraphFormatterPositioningAlgorithm::EFastAndSimpleMethodTop)));
     AlgorithmOptions.Add(MakeShareable(new EGraphFormatterPositioningAlgorithm(EGraphFormatterPositioningAlgorithm::EFastAndSimpleMethodMedian)));
     AlgorithmOptions.Add(MakeShareable(new EGraphFormatterPositioningAlgorithm(EGraphFormatterPositioningAlgorithm::ELayerSweep)));
+
+    // Test Delegate
+    FCoreUObjectDelegates::OnObjectModified.AddLambda([this](UObject* Object)
+    {
+        if (Object->HasAnyFlags(RF_ClassDefaultObject | RF_Transient | RF_ArchetypeObject)
+            || !Object->IsA<UEdGraphNode>()
+            || Object->GetOutermost() == GetTransientPackage())
+			return;
+
+        if (const UEdGraphNode* Node = Cast<UEdGraphNode>(Object))
+        {            
+            UE_LOG(LogTemp, Log, TEXT("Node Object modified: %s"), *Node->GetName());
+
+            bool bShouldAlign = false;
+
+            for (const UEdGraphPin* Pin : Node->Pins)
+            {
+                if (!Pin) continue;
+
+                if (Pin->LinkedTo.Num() > 0)
+                {
+                    bShouldAlign = true;
+					break;
+                }
+
+			}
+
+            if (bShouldAlign)
+            {
+				auto Graph = Node->GetGraph();
+                if (!Graph)
+                    return;
+
+                auto GraphEditor = FindEditorForObject(Object);
+                if (GraphEditor)
+                {
+                    FFormatter::Instance().SetCurrentEditor(GraphEditor, Graph);
+                    FFormatter::Instance().Format();
+				}
+			}
+        }
+	});
 }
 
 void FFormatterModule::ExtendToolBar(IAssetEditorInstance* Instance)
@@ -214,7 +256,7 @@ void FFormatterModule::HandleAutoFormatEvents(UObject* Object, IAssetEditorInsta
     }
 
 	TWeakObjectPtr<UObject> WeakObject(Object);
-    auto FormatDelegate = TDelegate<void(const FEdGraphEditAction&)>::CreateLambda(
+    auto GraphEditDelegate = TDelegate<void(const FEdGraphEditAction&)>::CreateLambda(
         [GraphEditor, WeakObject, this](const FEdGraphEditAction& EditAction)
         {
 			UE_LOG(LogTemp, Log, TEXT("Graph changed: Action=%d, UserInvoked=%s, NodesAffected=%d"), EditAction.Action, EditAction.bUserInvoked ? TEXT("true") : TEXT("false"), EditAction.Nodes.Num());
@@ -265,7 +307,17 @@ void FFormatterModule::HandleAutoFormatEvents(UObject* Object, IAssetEditorInsta
             }
         });
 
-    GraphEditor->GetCurrentGraph()->AddOnGraphChangedHandler(FormatDelegate);
+    auto GraphPropertyDelegate = TDelegate<void(const FPropertyChangedEvent&, const FString&)>::CreateLambda(
+        [](const FPropertyChangedEvent& PropertyEvent, const FString& IDK)
+        {
+            UE_LOG(LogTemp, Log, TEXT("Graph property changed: Property=%s, ChangeType=%d, IDK=%s"), *PropertyEvent.GetPropertyName().ToString(), PropertyEvent.ChangeType, *IDK);
+        }
+    );
+
+    auto Graph = GraphEditor->GetCurrentGraph();
+
+    Graph->AddOnGraphChangedHandler(GraphEditDelegate);
+    Graph->AddPropertyChangedNotifier(GraphPropertyDelegate);
 }
 
 static FText GetEnumAsString(EGraphFormatterPositioningAlgorithm EnumValue)
@@ -492,6 +544,7 @@ void FAssetEditorInstance::HandleEditorWidgetCreated(UObject* InObject)
         }
     }
 
+    /*
     if (Settings->bEnableAutomaticAlignment)
     {
         if (auto Editor = FFormatter::Instance().FindGraphEditorForTopLevelWindow())
@@ -499,6 +552,7 @@ void FAssetEditorInstance::HandleEditorWidgetCreated(UObject* InObject)
             Module->HandleAutoFormatEvents(Object, Instance);
 		}
     }
+    */
 
     if (GEditor)
     {
